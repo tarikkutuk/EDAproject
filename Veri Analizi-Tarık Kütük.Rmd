@@ -1,0 +1,751 @@
+---
+title: "Veri Analizi Dönem Ödevi"
+author: "Tarık Kütük-20181101048"
+date: "17 06 2022"
+output: html_document
+---
+
+# Tarık Kütük-20181101048 Veri Analizi Projesi
+
+# Veri Yapısı ve Değişkenler:
+Proje kapsamında incelenecek veri 303 gözlem ve 12 adet değişkenden oluşmaktadır. Kayıp gözlem bulunmayan verideki değişkenlerin açıklamaları şöyledir:
+1. age: Gözlemlenen hastaların yaşı
+2. sex: Gözlemlenen hastaların cinsiyeti 
+	0: Kadın
+	1: Erkek
+3.  trestbps: Hasta dinlenirken/kan akışı durgunken kan basıncı
+4.	restecg: Hastanın Elektrokardiyografik Sonuçları
+	0: Normal
+	1: ST-T Dalga Anormalliği var
+	2: Estes Kriterlerine göre olası veya kesin sol ventrikül hipertrofi var
+5.  thalach: Hastanın ölçülen maksimum kalp atış hızı
+6.	slope: ST segmentinin eğimi
+	0: Yukarı Eğimli
+	1: Eğimsiz-Düz
+	2: Aşağı Eğimli
+7.  target: Kalp Hastalığı Teşhisi
+	0: Sağlıklı
+	1: Hasta
+	
+```{r, include=FALSE}
+library(funModeling)
+library(mice)
+library(VIM)
+library(ISLR)
+library(Hmisc)
+library(rattle)
+library(rpart)
+library(rpart.plot)
+library(readxl)
+library(psych)
+library(ggplot2)
+library(PerformanceAnalytics)
+library(rstatix)
+library(dplyr)
+library(tidyverse)
+library(DMwR2)
+library(plotly)
+library(ggExtra)
+library(GGally)
+library(caret)
+library(rcompanion)
+veri <- read_excel("C:/Users/tarik/Desktop/okul/veri analizi/veri.xlsx")
+veri<-as.data.frame(veri)
+veri$sex<-factor(veri$sex, levels = c(0,1),labels=c("Kadın","Erkek"))
+veri$restecg<-factor(veri$restecg, levels =c(0,1,2), labels = c("Normal","ST-T Dalga Anormalliği","Hipertrofi") )
+veri$slope<-factor(veri$slope, levels=c(0,1,2), labels=c("Yukarı Eğimli","Düz","Aşağı Eğimli"))
+veri$target<-factor(veri$target, levels = c(0,1), labels= c("Sağlıklı","Hasta"))
+```
+
+
+```{r}
+glimpse(veri)
+```
+
+
+# Problemin Tanımı ve Amaçlar:
+Bu projede amaç hastaların, kalp hastası olup olmama durumunu araştırmaktır. Projenin sonucunda veri kaynağı olan hastanelerle bir bilgi alışverişi olmayacaktır. Projedeki asıl amaç uygulanan veri analizi yöntemlerinin öğrenmek ve bu yöntemleri kullanabilmektir.
+
+# Verilerin Toplanması:
+Budapeşte’deki Macar Kardiyoloji Enstitüsü, İsveç’teki Üniversite Hastanesi, Basel’deki Üniversite Hastanesi ve Long Beach ve Cleveland’daki V.A. Tıp Merkezindeki belirli kardiyovasküler olayları tahmin etmek ve kalp sağlığına ilişkin net göstergeler bulabilmek için oluşturulmuş bir veridir. 
+
+# Değişkenlerin incelenmesi:
+Değişkenlere ait dağılım grafikleri ve frekans tabloları verilmiştir.
+
+
+```{r, warning=FALSE}
+niceller<-veri[,c(1,3,4)]
+niteller<-veri[,c(2,5,6,7)]
+plot_num(niceller)
+```
+```{r, warning=FALSE}
+freq(veri)
+```
+```{r}
+profiling_num(veri)
+nicel_ozellikleri<-t(profiling_num(niceller))
+nicel_ozellikleri<-as.data.frame(nicel_ozellikleri)
+nicel_ozellikleri
+```
+# Eksik Gözlem İncelemesi
+```{r}
+colSums(is.na(veri))
+```
+
+Verinin orijinal halinde eksik gözlem bulunmamaktadır. Eksik gözlem varlığında yapılacak doldurma işlemleri için bir nitel (slope) bir de nicel değişkende (age) gözlemler eksik hale getirilmiştir. 
+
+```{r}
+#orijinal veriyi bozmamak için kopyası alındı ve kopya üzerinde eksik gözlem oluşturuldu.
+kopya<-veri
+kopya[sample(1:nrow(kopya),floor(nrow(kopya)*0.05)),"age"]<- NA
+kopya[sample(1:nrow(kopya),floor(nrow(kopya)*0.03)),"slope"]<- NA
+colSums(is.na(kopya))
+
+#1 nicel 1 nitel değişkende rasgele kayıp gözlem oluşturuldu
+
+```
+
+```{r}
+md.pattern(kopya)
+```
+Tablo bize age ve slope değişkenlerinde eksik gözlem olduğunu, age değişkeninde 15 gözlemin, slope değişkeninde ise 9 gözlemin eksik olduğunu göstermektedir.
+```{r}
+aggr(kopya,col=c("navyblue","orange"),numbers=TRUE, sortVars=TRUE, labels=names(kopya),cex.axis=.7,gap=3,ylab=c("Missing Ratio","Missing Pattern"))
+```
+Age değişkeninin %5’inin, slope değişkenin %3’ünün kayıp gözlem olduğu tespit edilmiştir.
+
+```{r, echo=FALSE}
+eksikler_age<-which(is.na(kopya$age))
+eksikler_slope<-which(is.na(kopya$slope))
+
+```
+
+# Eksik Gözlemlerin Tamamlanması:
+## Ortalama ile Tamamlama
+İşlemden önce age değişkeninin histogramı şu şekildedir.
+```{r}
+ort_ile<-kopya
+hist(ort_ile$age, main = "işlemden önce")
+```
+
+İşlemden sonra ise histogram şöyle olmuştur.
+
+```{r}
+ort_ile$age[is.na(ort_ile$age)]<-mean(ort_ile$age,na.rm=TRUE)
+hist(ort_ile$age,main = "işlemden sonra")
+```
+*Ortalama ile eksik gözlem tamamlama işlemi, dağılımın varyansını küçülterek dağılımın ortalama çevresinde toplanmasına yol açmıştır.*
+
+## k-En Yakın Komşuluk ile Tamamlama
+Eksik gözlemler KNN algoritması (medyan metodu) ile doldurulacaktır.
+
+```{r}
+knn_ile<-kopya
+anyNA(knn_ile)
+knn_imp<-knnImputation(knn_ile, k=5, meth="median")
+anyNA(knn_imp)
+```
+
+```{r}
+a<-veri$age[eksikler_age]
+b<-veri$slope[eksikler_slope]
+c<-knn_imp$age[eksikler_age]
+d<-knn_imp$slope[eksikler_slope]
+karsilastirma1<-data.frame(c,a)
+karsilastirma1<-t(karsilastirma1)
+karsilastirma1
+```
+
+Knn ile doldurulmuş değerler ve verideki orijinal değerler verilmiştir. c knn ile doldurulan, a orijinal değerlerdir.
+
+
+```{r}
+hist(veri$age, main = "orijinal")
+```
+Yaş değişkeninin orijinal dağılımı
+```{r}
+hist(knn_imp$age,main = "knn ile")
+```
+
+Yaş değişkeninin KNN ile doldurulmuş dağılımı
+
+```{r}
+var(knn_imp$age)
+median(knn_imp$age)
+mean(knn_imp$age)
+```
+
+*KNN algoritması da yaş değişkeninin orijinal varyansına göre 1 puan düşürmüş, ortalamasını ise 0,06 puan farkla doğru şekilde tamamlamıştır. Oldukça orijinale yakın tamamlama yapıldığı söylenebilir.*
+
+
+```{r}
+table(b,d)
+```
+
+slope değişkenindeki eksik gözlemlerin KNN ile tamamlanmış ve orijinal değerlerinin çapraz tablosu verilmiştir.
+b orijinal değerler, d KNN ile tamamlanmış değerlerdir.
+
+*Algoritmanın bu değişken için iyi atama yaptığı söylenemez. 9 gözlemden 5'ini doğru atamıştır fakat "yukarı eğimli" gruba hiç atama yapmaması belki de algoritmanın yanlı olabileceğini gösterir. Algoritma geliştirilmeli ya da başka bir yöntem tercih edilmelidir.*
+
+## Regresyon Yöntemi ile Tamamlama:
+Yaş değişkenindeki eksik gözlemler regresyon yöntemiyle tamamlanacaktır.
+
+```{r}
+regkopya<-kopya
+impute_arg<- aregImpute(age ~ sex + trestbps + thalach  + target, data = kopya, n.impute = 1)
+e<-which(is.na(regkopya$age))
+regkopya[e,]$age<-impute_arg$imputed$age
+atanan_reg<-impute_arg$imputed$age
+karsilastirma2<-data.frame(atanan_reg,a)
+karsilastirma2<-t(karsilastirma2)
+karsilastirma2
+```
+```{r}
+hist(regkopya$age, main = "regresyon yöntemi ile")
+```
+
+Regresyon yöntemi ile eksik gözlemleri tamamlanmış yaş değişkeninin dağılımı verilmiştir.
+
+```{r}
+var(regkopya$age)
+median(regkopya$age)
+mean(regkopya$age)
+```
+*Regresyon yöntemi yaş değişkeninin orijinal varyansını 2 puan düşürmüş ve ortalamasını sadece 0,18 puan farkla doğru şekilde doldurmuştur.*
+
+## Karar Ağacı Yöntemi ile Tamamlama
+Yaş değişkenindeki eksik gözlemler karar ağacı yöntemi ile tamamlanacaktır.
+
+```{r}
+karar_agc<-kopya
+rtree<-rpart(age ~ sex + trestbps + thalach + target, karar_agc, method = "anova")
+fancyRpartPlot(rtree, cex= 0.8)
+```
+```{r}
+karar_agc$age<-ifelse(is.na(karar_agc$age), predict(rtree,karar_agc,type = "vector"),karar_agc$age)
+f<-karar_agc$age[eksikler_age]
+karsilastirma3<-data.frame(f,a)
+karsilastirma3<-t(karsilastirma3)
+karsilastirma3
+```
+```{r}
+hist(karar_agc$age, main = "karar ağacı ile")
+```
+
+Karar ağacı ile eksik gözlemleri doldurulan yaş değişkeninin dağılımı verilmiştir.
+
+```{r}
+var(karar_agc$age)
+median(karar_agc$age)
+mean(karar_agc$age)
+```
+
+*Yaş değişkenindeki eksik gözlemler karar ağacı ile doldurulduğunda yeni dağılımın varyansı orijinal dağılımın varyansından 2 puan düşük, ortalaması ise 0,02 puan farkla doğru tahmin edilmiştir. Karşılaştırma tablosuna bakıldığında bazı gözlemlerin yaşı olması gerekenden oldukça uzak tahmin edilmiştir.*
+
+# Nicel Değişken Kategorikleştirme
+Yaş değişkeni 3 gruba ayrılacaktır.
+
+```{r}
+veri2<-veri
+percentile00<-min(veri2$age)
+percentile100<-max(veri2$age)
+percentile33<- quantile(veri2$age, 0.3333)
+percentile67<- quantile(veri2$age, 0.6667)
+
+veri2$kt_age[veri2$age>= percentile00 & veri2$age< percentile33]<-"0"
+veri2$kt_age[veri2$age>= percentile33 & veri2$age< percentile67]<-"1"
+veri2$kt_age[veri2$age>= percentile67 & veri2$age<= percentile100]<-"2"
+veri2$kt_age<-factor(veri2$kt_age, levels = c(0,1,2), labels = c("genç","orta yaşlı","yaşlı"))
+glimpse(veri2)
+```
+
+Yeni oluşturulan Kategorik Yaş değişkeninin frekans dağılımı şu şekildedir.
+
+```{r, warning=FALSE}
+freq(veri2$kt_age)
+```
+
+Veri train ve test olarak ikiye bölündü.
+Bundan sonraki aşamalarda da train verisiyle devam edilecektir.
+
+```{r}
+set.seed(8367325)
+trainIndex <- sample(1:nrow(veri2), size = round(0.8*nrow(veri2)), replace=FALSE)
+train_veri <- veri2[trainIndex ,]
+test_veri <- veri2[-trainIndex ,]
+
+summary(train_veri)
+summary(test_veri)
+```
+
+Target (bağımlı değişken) için düzeyler bazında diğer değişkenlerin istatistikleri
+
+```{r}
+describeBy(train_veri, train_veri$target)
+```
+
+
+```{r, warning=FALSE}
+ggplot(train_veri, aes(x=target,y=train_veri$trestbps, fill=kt_age))+
+  geom_boxplot()   
+```
+Grafikte bağımlı değişkenin iki grubunda ayrı ayrı yaş kategorilerinin kan basıncı seviyeleri verilmiştir. Buradan anlaşılmaktadır ki yaş arttıkça kan basıncı seviyeleri artmaktadır. Sağlıklı grupta orta yaşlılarda kan basıncı seviyesi bakımından 5 adet outlier bulunmakta. Dönüşüm yapıldıktan sonra da bu aykırılık devam ettiği taktirde gözlemleri inceleyip daha sonra da çıkarılmaları gerekiyorsa çıkarılacaklar.
+
+```{r}
+ggplot(train_veri, aes(x=target,y=thalach, fill=kt_age))+
+  geom_boxplot()   
+
+```
+
+Grafikte bağımlı değişkenin iki grubunda da gözlemlerin maksimum kalp atış hızı seviyeleri verilmiştir. Sağlıklı gözlemlerde maksimum kalp atışı seviyesi her yaş grubunda yaklaşık aynı seyrederken, hasta grupta yaş ilerledikçe maksimum kalp atış hızı seviyesinin gittikçe düştüğü görülmüştür. Sağlıklı ve yaşlı gruptaki gözlemlerden birinin outlier olduğu tespit edilmekte. Bununla birlikte hasta ve genç grupta 2 ve hasta ve orta yaşlı grupta da 2 gözlemin outlier olduğu göze çarpmakta. Bu gözlemler de dönüşüm aşamasından sonra kontrol edilecek ve yanlış kayıt olma durumunda veriden çıkarılacaktır.
+
+
+## Değişim ölçüleri
+### Değişim katsayıları
+
+```{r}
+age_degisim_kts<-(sd(train_veri$age)/mean(train_veri$age))*100
+trestbps_degisim_kts<-(sd(train_veri$trestbps)/mean(train_veri$trestbps))*100
+thalach_degisim_kts<-(sd(train_veri$thalach)/mean(train_veri$thalach))*100
+degisimkatsayileri<-c(age_degisim_kts, trestbps_degisim_kts, thalach_degisim_kts)
+
+karsilastirma3<-data.frame(degisimkatsayileri, colnames(niceller))
+karsilastirma3
+```
+
+Kan basıncının diğer iki değişkene göre daha az değişkenlik gösterdiğini söylemek mümkündür. Değişkenlik ölçüsü bakımından en yüksek değişken ise yaştır.
+
+```{r}
+sd_dk <- function(x) {c(std<-sd(x), dk<-(sd(x)/mean(x))*100)}
+tapply(train_veri$age, train_veri$target, sd_dk)
+```
+Sağlıklı ve Hasta grupları bazında yaşın değişim katsayılarına bakıldığında görülür ki hasta gözlemlerin yaş aralıkları daha geniştir.
+
+### MAD DEĞERLERİ
+
+```{r}
+median_age<-median(train_veri$age)
+median_trestbps<-median(train_veri$trestbps)
+median_thalach<-median(train_veri$thalach)
+
+yas_mad<-median(abs(train_veri$age-median_age))
+trestbps_mad<-median(abs(train_veri$trestbps-median_trestbps))
+thalach_mad<-median(abs(train_veri$trestbps-median_thalach))
+
+mads<-data.frame(yas_mad,trestbps_mad,thalach_mad)
+mads
+```
+
+MAD değerlerine bakıldığında gözlemlerin yaşları, ortanca çevresinde dağılırken; maksimum kalp atışları ortancadan oldukça uzak dağıldıkları görülür.
+
+
+### Genişletilmiş Nokta Özetleri
+```{r}
+sol <- function(x) {
+  c(quantile(x, probs = 1/2) , 
+    quantile(x, probs = 1/4),
+    quantile(x, probs =1/8 ),
+    quantile(x,probs=1/16),
+    quantile(x,probs=1/32),
+    quantile(x,probs=1/64)
+  )
+}
+
+sag <- function(x) {
+  c(quantile(x, probs = 1/2) , 
+    quantile(x, probs = 3/4),
+    quantile(x, probs = 7/8),
+    quantile(x,probs=15/16),
+    quantile(x,probs=31/32),
+    quantile(x,probs=63/64)
+  )
+}
+
+```
+
+
+```{r}
+h<-tapply(train_veri$age, train_veri$target, sol)
+mrg_age<-as.data.frame(cbind(h[[1]],h[[2]]))
+colnames(mrg_age)<-c("Hasta","Sağlıklı")
+mrg_age$fark<-abs(mrg_age$Hasta-mrg_age$Sağlıklı)
+mrg_age
+
+
+i<-tapply(train_veri$age, train_veri$target, sag)
+mrg_age2<-as.data.frame(cbind(i[[1]],i[[2]]))
+colnames(mrg_age2)<-c("Hasta","Sağlıklı")
+mrg_age2$fark<-abs(mrg_age2$Hasta-mrg_age2$Sağlıklı)
+mrg_age2
+```
+
+
+Farklara bakarak yaş değişkeninin solda da sağda da bağımlı değişken gruplarına göre dağılımlarının aynı olduğu söylenebilir.
+
+
+### Kesilmiş ortalama
+
+```{r}
+mean(train_veri$age)
+mean(train_veri$age, trim = 0.1)
+nrow(train_veri)- (as.integer(2*0.1*nrow(train_veri)))
+```
+Gözlemlerin yaş ortalamasının, 242 gözlem yerine %10 kesilerek 194 gözlem ile hesaplandığında 0.08 puan oynadığı görülmüştür ki bu yaş bakımından gözlemlerde uç değerlerin olmadığının bir göstergesidir.
+
+### GİNİ
+```{r}
+gini <- function(a,b) {
+  a1 <- (a/(a+b))**2
+  b1 <- (b/(a+b))**2
+  x<-1-(a1 + b1)
+  return(x)
+}
+gini2 <- function(a,b,c) {
+  a1 <- (a/(a+b+c))**2
+  b1 <- (b/(a+b+c))**2
+  c1 <- (c/(a+b+c))**2
+  x<-1-(a1 + b1+c1)
+  return(x)
+}
+```
+
+```{r}
+sex_freq<-as.data.frame(table(train_veri$sex))
+sex_gini<-gini(sex_freq[1,2],sex_freq[2,2])/((2-1)/2)
+
+restecg_freq<-as.data.frame(table(train_veri$restecg))
+restecg_gini<-gini2(restecg_freq[1,2],restecg_freq[2,2],restecg_freq[3,2])/((3-1)/3)
+
+slope_freq<-as.data.frame(table(train_veri$slope))
+slope_gini<-gini2(slope_freq[1,2],slope_freq[2,2],slope_freq[3,2])/((3-1)/3)
+
+target_freq<-as.data.frame(table(train_veri$target))
+target_gini<-gini(target_freq[1,2],target_freq[2,2])/((2-1)/2)
+
+kt_age_freq<-as.data.frame(table(train_veri$kt_age))
+kt_age_gini<-gini2(kt_age_freq[1,2],kt_age_freq[2,2],kt_age_freq[3,2])/((3-1)/3)
+
+nitel_isimler<-c("sex","restecg","slope","target","kt_age")
+gini_degerleri<-c(sex_gini,restecg_gini,slope_gini,target_gini,kt_age_gini)
+gini_degerleri<-round(gini_degerleri,2)
+ginies<-as.data.frame(gini_degerleri,nitel_isimler)
+ginies
+```
+
+Tabloda uygun değişkenlerin gini değerlerinin normalleştirilmiş hali verilmiştir. Buna göre cinsiyet, restecg ve slope değişkenlerinde homojen bir yapı varken; target ve kategorik yaş değişkeninde ise heterojen bir yapıdan söz edilebilir. Homojen yapıdaki değişkenler, heterojen yapıdakilere göre daha fazla değişkenlik gösterdiği anlaşılır.
+
+
+### Entropi
+
+```{r}
+entropy<-function(base,a,b) {
+  var <-  abs(((a)/(a+b))*log(((a)/(a+b)),base))-(((b)/(a+b))*log(((b)/(a+b)),base))
+  return(var)
+}
+
+entropy2<-function(base,a,b,c) {
+  var <-  abs(((a)/(a+b+c))*log(((a)/(a+b+c)),base))-(((b)/(a+b+c))*log(((b)/(a+b+c)),base))-(((c)/(a+b+c))*log(((c)/(a+b+c)),base))
+  return(var)
+}
+
+```
+
+```{r}
+ent_sex<-entropy(10,sex_freq[1,2],sex_freq[2,2])
+z_ent_sex<-ent_sex/log(2,10)
+
+ent_restecg<-entropy2(10, restecg_freq[1,2],restecg_freq[2,2],restecg_freq[3,2])
+z_ent_restecg<-ent_restecg/log(3,10)
+
+ent_slope<-entropy2(10, slope_freq[1,2],slope_freq[2,2],slope_freq[3,2])
+z_ent_slope<-ent_slope/log(3,10)
+
+ent_target<-entropy(10, target_freq[1,2],target_freq[2,2])
+z_ent_target<-ent_target/log(2,10)
+
+ent_kt_age<-entropy2(10, kt_age_freq[1,2], kt_age_freq[2,2],kt_age_freq[3,2])
+z_ent_kt_age<-ent_kt_age/log(3,10)
+
+entropi_degerleri<-round(c(ent_sex,ent_restecg,ent_slope,ent_target,ent_kt_age),2)
+entropi_z_degerleri<-round(c(z_ent_sex,z_ent_restecg,z_ent_slope,z_ent_target,z_ent_kt_age),2)
+entropies<-data.frame(nitel_isimler,entropi_degerleri, entropi_z_degerleri)
+entropies
+```
+
+Tabloda uygun değişkenlerin entropi ve normalleştirilmiş entropi değerleri verilmiştir. Burada da target ve kategorik yaş için heterojen; slope, restecg ve cinsiyet içinse homojen bir yapıdan söz edilebilir. Homojen yapıdaki değişkenler, heterojen yapıdakilere göre daha fazla değişkenlik gösterdiği burada da görülmüştür.
+
+
+
+### Grafiklerle inceleme
+```{r, warning=FALSE}
+train_veri$no<-c(1:nrow(train_veri))
+plot_num(train_veri[,c(1,3,4)])
+
+```
+
+Verideki nicel değişkenlerin Histogramlarına bakıldığında yaş için hafif sola çarpık, kan basıncı için hafif sağa çarpık ve maksimum kalp atışı içinse sola çarpık denebilir.
+Değişkenlere dönüşüm yapmadan önce ikili ilişkileri incelenecektir.
+
+
+
+```{r, warning=FALSE}
+j<-ggplot(train_veri, aes(train_veri$age,train_veri$thalach, color=train_veri$target))+
+  geom_point(size=1,alpha=0.8)+
+  geom_text(size=3,label= train_veri$no ,nudge_x=0.25,
+            nudge_y=0.25, check_overlap=T)+
+  geom_smooth(method = "loess", col="red",se = FALSE)
+
+ggplotly(j)
+```
+
+Grafik incelendiğinde, yaş ve maksimum kalp atışı arasında ters yönlü bir ilişki olduğu söylenebilir. Bununla birlikte 158inci, 223üncü ve 155inci gözlemlerde bir aykırılık söz konusu olabilir.
+Bununla birlikte grafikte açık mavi ile gösterilen gözlemler hastaları, turuncu ile gösterilen gözlemler sağlıklıları ifade ediyor. Grafiğe bakarak hasta grubun maksimum kalp atışı seviyesinin genel olarak sağlıklılardan daha yüksek olduğunu söylemek mümkün.
+
+```{r}
+k<-ggplot(train_veri, aes(age,trestbps, color=target))+
+  geom_point(size=1,alpha=0.8)+
+  geom_text(size=3,label=train_veri$no,nudge_x=0.25,
+            nudge_y=0.25, check_overlap=T)+
+  geom_smooth(method = "loess", col="red",se = FALSE)
+ggplotly(k)
+```
+
+Yaş ve kan basıncı arasındaki ilişkiye bakıldığında ise doğrusal bir ilişki olmadığı görülmektedir. 76, 83, 160, 131, 42 129, 43 ve 188 numaralı gözlemlerde bir aykırılık söz konusu olabilir. 
+Hasta gözlemlerin kan basıncı seviyeleri ortalama çevreinde yoğunlaşırken, Sağlıklı gözlemlerin kan basınçları oldukça yayılmış denebilir.
+
+```{r}
+gr<-ggplot(train_veri,aes(x=thalach,y=trestbps))+
+  geom_point()+
+  geom_text(size=3,label=train_veri$no,nudge_x=0.25,
+            nudge_y=0.25, check_overlap=T)+
+  geom_smooth(method=lm,col="brown1", se=FALSE)
+
+ggMarginal(gr,type="histogram",fill="darksalmon")
+
+```
+
+
+Kan basıncı ve maksimum kalp atışı dağılımına bakıldığında da yaklaşık doğrusal bir ilişki olduğu söylenebilir. 
+
+
+```{r}
+niceller_train<-train_veri[,c(1,3,4)]
+
+chart.Correlation(niceller_train, histogram=TRUE, pch=19, method = "kendall")
+```
+
+
+Değişkenlerin birbirleriyle olan nonparametrik korelasyon değerleri, histogramları ve saçılım grafikleri verilmiştir. Değişkenler arasında yüksek korelasyon bulunmadığı göze çarpmaktadır. Değişkenlerin birbirlerinden bağımsız oldukları anlaşılmıştır.
+
+### Ortanca İzi Çizimi
+```{r}
+m<-train_veri %>%group_by(kt_age) %>%
+  summarize(Q1=quantile (thalach, probs=0.25), Median=quantile (thalach, probs=0.50), Q3=quantile(thalach, probs=0.75), DAG=Q3-Q1)
+
+ggplot(m, aes(x=m$kt_age,y=Median, color=kt_age, group=1))+
+  geom_point(size=4,alpha=0.6)+
+  geom_line(color="red")
+
+```
+
+Grafikte maksimum kalp atışı değişkeninin, yaş gruplarına göre ortanca izi çizimi verilmiştir. Genç grupta yüksek olan maksimum kalp atışı, yaşlı grupta düşük, orta yaşlı grupta ise genel ortancaya yakın olduğu görülmüştür. Yaş ilerledikçe kalp atışı hızının düştüğü yorumu yapılabilir. (Thalach değişkeni medyanı 153.5'ti)
+
+
+
+### Konum Varyans Çizimleri
+```{r}
+n<-train_veri %>%group_by(restecg) %>%
+  summarize(Q1=quantile (trestbps, probs=0.25), Trestbps_median=quantile (trestbps, probs=0.50), Q3=quantile(trestbps, probs=0.75), DAG=Q3-Q1)
+
+ggplot(n, aes(x=restecg,y=DAG, color=restecg, group=3))+
+  geom_point(size=4,alpha=0.6)+
+  geom_line(color="black")
+
+```
+
+Yayılım ölçüsü olarak Dörttebirler Arası Genişlik kullanılmıştır. Kan basıncındaki yayılım, hastaların elektrokardiyografik sonuçlarına (restecg) göre incelenmektedir. Grafikten ST-T dalga anormalliği olan gözlemlerde kan basıncının fazla değişmediği fakat hipertrofisi olan gözlemlerde kan basıncının diğer gruplardan çok daha fazla yayılım gösterdiği gözükmektedir. Buradan de hipertrofinin, kan basıncını değiştiren bir durum olduğu anlaşılabilir.
+
+### Etkileşim
+
+```{r}
+etk_yas_cinsiyet<-train_veri%>%
+  group_by(sex,kt_age)%>% 
+  summarise(Medyan_trestbps=median(trestbps))
+etk_yas_cinsiyet
+
+ggplot(etk_yas_cinsiyet, aes(x = kt_age, y = Medyan_trestbps,color=sex, group=sex)) +
+  geom_line() +
+  geom_point()
+
+
+```
+
+Kan basıncı'nın Cinsiyet ve Yaş gruplarına göre ortancalarının grafiği verilmiştir. Burada Genç grupta erkeklerin kan basıncı daha yüksekken, diğer yaş gruplarında kadınların kan basıncının erkeklerden yüksek olduğu görülmektedir. Genç grupla orta yaşlı grup arasında kan basıncı değeri açısından bir etkileşim söz konusudur.
+
+
+## Dönüşüm
+Yaş değişkeni yaklaşık normal dağıldığı için dönüşüme ihtiyaç yoktur.
+```{r}
+hist(train_veri$age, main = "yaş")
+```
+
+
+### Kan basıncı değişkeni için dönüşüm:
+Kan basıncı hafif sağa çarpık olduğu için dönüşüm yapılacaktır. Yapılacak dönüşümü bulmak için Tukey'in yöntemine başvurulmuştur.
+
+
+```{r}
+trestbps_tukey<-transformTukey(train_veri$trestbps,plotit=TRUE)
+```
+
+Lambda -0.725 bulunmuştur. Değişkenin normal dağılması için bu değerle üstel dönüşüm yapılacaktır.
+
+
+
+```{r}
+train_veri$trestbps2<- -1*(train_veri$trestbps)^-0.725
+hist(train_veri$trestbps, main = "Dönüşüm öncesi")
+hist(train_veri$trestbps2, main = "Dönüşüm sonrası")
+```
+
+Histogramda da görüldüğü gibi kan basıncı değişkeni için normal dağılım sağlanmıştır.
+
+
+```{r}
+outlierr_func <- function(x) {
+  return(x < quantile(x, 0.25) - 1.5 * IQR(x) | x > quantile(x, 0.75) + 1.5 * IQR(x))
+}
+
+```
+
+
+```{r}
+train_veri <- train_veri %>%  group_by(target) %>%
+  mutate(outlierr_func=ifelse(outlierr_func(trestbps2), trestbps2, as.numeric(NA)))
+
+train_veri$no[which(is.na(train_veri$outlierr_func))] <- as.numeric(NA)
+
+```
+
+```{r}
+ggplot(train_veri, aes(y=trestbps2, x=factor(target),fill=target))+
+  geom_boxplot() + 
+  geom_text(aes(label=no),na.rm=TRUE,nudge_x=0.15,size=3.5)
+```
+
+Kan basıncı değişkeninin orijinal halinde outlier olduğu düşünülen gözlemler artık outlier olmaktan çıkmıştır. Sadece 76. gözlemin bu dönüşümden sonra outlier olduğu görülmüştür.
+Yeni oluşturulan kan basıncı değişkenine ait istatistikler şöyledir:
+
+```{r}
+profiling_num(train_veri$trestbps2)
+```
+
+### Kalp atış hızı değişkeni için dönüşüm:
+Kalp atışı değişkeni hafif sola çarpık olduğu için bu değişken için de dönüşüm yapılacaktır. Yapılacak dönüşümü bulmak için Tukey'in yöntemine başvurulmuştur.
+
+
+```{r}
+train_veri$no2<-c(1:nrow(train_veri))
+thalach_tukey<-transformTukey(train_veri$thalach, plotit = T)
+```
+
+Lambda 2.2 çıkmıştır. Bu sebeple değişkene 2.2 üstel dönüşüm yapılacaktır.
+
+```{r}
+
+train_veri$thalach2<-train_veri$thalach^2.2
+hist(train_veri$thalach, main = "Dönüşüm Öncesi")
+hist(train_veri$thalach2, main = "Dönüşüm Sonrası")
+```
+```{r}
+train_veri <- train_veri %>%  group_by(target) %>%
+  mutate(outlierr_func2=ifelse(outlierr_func(thalach2), thalach2, as.numeric(NA)))
+
+train_veri$no2[which(is.na(train_veri$outlierr_func2))] <- as.numeric(NA)
+```
+
+
+```{r}
+ggplot(train_veri, aes(y=thalach2, x=factor(target),fill=target))+
+  geom_boxplot() + 
+  geom_text(aes(label=no2),na.rm=TRUE,nudge_x=0.15,size=3.5)
+```
+
+Dönüşüm uygulandıktan sonra tekrar bakıldığında, dönüşüm öncesinde outlier olduğu düşünülen gözlemler düzeltilmiş fakat 160. gözlem sağlıklı gruba göre, 231.ve 223. gözlem ise hasta gruba göre yine outlier olarak tanımlanmıştır.
+
+Yeni kalp atışı değişkenine ait bazı istatistikler şöyledir.
+
+```{r}
+profiling_num(train_veri$thalach2)
+```
+
+
+Aykırı olduğu tespit edilen gözlemler ile grafik vs için oluşturulan geçici sütunlar siliniyor.
+
+```{r}
+view(train_veri)
+train_veri_son<-train_veri[-c(160,231,223,76),-c(9,11,12,14)]
+```
+
+Artık test verisi modelleme için hazır denebilir.
+
+# Modelleme
+## Karar Ağacı Modeli
+
+Öncelikle train verisinde yapılan dönüşümler test verisi ile de yapılmalıdır.
+
+```{r}
+test_veri$trestbps2<- -1*(test_veri$trestbps)^-0.725
+test_veri$thalach2<-test_veri$thalach^2.2
+```
+
+
+Şimdi modele geçilebilir.
+
+```{r}
+d_tree<-rpart(target~ age + sex+ trestbps2+ thalach2+ restecg+ slope, data = train_veri_son, method = "class")
+rpart.plot(d_tree)
+```
+
+Karar ağacı modeli verilmiştir. Bu modelde dönüşüm yapılan değişkenler kullanılmıştır. Sınıflama için en önemli değişkenin maksimum kalp atışı olduğu görülmüştür. Dönüşüm yapılan bu değer 59e^+3'den küçük olan gözlemler sola, büyük olanlar sağa devam etmiştir. Sola devam edildiğinde ise en önemli değişkenin St segmentinin eğimi olduğu görülmüştür. Gözlemin st segmenti eğimi yukarı eğimli ya da düz ise gözlemin sağlıklı, aşağı eğimliyse hasta olduğu görülmüştür. Maksimum kalp atışında sağ tarafa devam edildiğinde ise gözlemin yaşının önemli olduğu görülmüştür. Gözlemin yaşı 58 veya 58'den büyük ise sola devam etmiş, 58'den küçük ise gözlemin hasta olduğu görülmüştür. Sola devam edildiğinde ise hastanın yine st segmenti eğimi önemli olmuş ve eğer gözlemin st segmenti eğimi düz ise gözlemin sağlıklı, düz değil ise gözlemin hasta olduğu görülmüştür.
+
+
+```{r}
+confmattest<-table(predict(d_tree,test_veri, type = "class"), test_veri$target)
+confusionMatrix(confmattest, positive = "Sağlıklı")
+```
+
+Test verisi için model çalıştırılmış, atama matrisi ve sınıflama başarısını ölçmek için bazı metrikler verilmiştir. Burada modelin Doğru atama oranının %72 olduğu saptanmıştır.
+
+23 gözlem gerçekten sağlıklıyken model de bu gözlemleri sağlıklı atamıştır.
+
+5 gözlem gerçekte sağlıklıyken model hasta atamıştır.
+
+12 gözlem gerçekte hasta iken model sağlıklı atamıştır.
+
+21 gözlem gerçekte hasta iken model de hasta atamıştır.
+
+
+Karar ağacının dönüşüme ihtiyaç duymayan bir algoritma olmasından dolayı aynı model bu kez dönüşüm yapılmayan değişkenler ile kurulacak ve farklılık olup olmadığı araştırılacaktır.
+
+```{r}
+d_tree2<-rpart(target~ age+sex+trestbps+thalach+restecg+slope, data=train_veri_son,method = "class" )
+rpart.plot(d_tree2)
+```
+
+Görüldüğü gibi dönüşüm yapılmayan değişkenlerle model kurulduğunda da modelin yapısında bir değişim olmadığı görülmüştür. 
+
+```{r}
+confmattest2<-table(predict(d_tree2,test_veri,type = "class"), test_veri$target)
+confusionMatrix(confmattest2, positive = "Sağlıklı")
+```
+
+2. modelin de atama matrisi ve sınıflama başarısı için metrikleri verilmiştir. İlk modelden bir farkı olmadığı görülmektedir.
+
+Burada doğru atama oranının değeri yeterli bulunduğundan modelleme bitirilmiştir.
+
+
+# Kaynakça:
+Veri kaynağı: https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset
+Değişken açıklamaları ve Veri toplama hikayesi için: https://archive.ics.uci.edu/ml/datasets/Heart+Disease
+
